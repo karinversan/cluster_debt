@@ -1,3 +1,4 @@
+import os
 import tempfile
 
 import pandas as pd
@@ -18,6 +19,10 @@ VIZ_MODEL_NAME = "segmentation_viz_pca"
 def train(k: int = 4, use_pca: bool = True, pca_var: float = 0.9) -> str:
     import mlflow
     import mlflow.sklearn
+
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if tracking_uri:
+        mlflow.set_tracking_uri(tracking_uri)
 
     engine = get_engine()
     df = pd.read_sql("SELECT * FROM customer_features", engine)

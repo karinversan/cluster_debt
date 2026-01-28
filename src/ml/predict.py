@@ -26,6 +26,12 @@ MODEL_ARTIFACT_PATH = "segmentation_model"
 VIZ_ARTIFACT_PATH = "viz_pca_model"
 
 
+def _is_valid_uri(uri: Optional[str]) -> bool:
+    if not uri:
+        return False
+    return uri.startswith("runs:/") or uri.startswith("models:/") or "://" in uri
+
+
 def _latest_run_id() -> str:
     from mlflow.tracking import MlflowClient
 
@@ -58,8 +64,12 @@ def resolve_model_uris(
 ) -> Tuple[str, str]:
     seg_uri = seg_uri or os.environ.get("SEG_MODEL_URI")
     viz_uri = viz_uri or os.environ.get("VIZ_MODEL_URI")
-    if seg_uri and viz_uri:
+    if _is_valid_uri(seg_uri) and _is_valid_uri(viz_uri):
         return seg_uri, viz_uri
+    if not _is_valid_uri(seg_uri):
+        seg_uri = None
+    if not _is_valid_uri(viz_uri):
+        viz_uri = None
 
     run_id = _latest_run_id()
     return (

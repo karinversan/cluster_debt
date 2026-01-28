@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: mlops
       POSTGRES_DB: segmentation
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -23,7 +23,9 @@ services:
       chmod -R 777 /mlflow &&
       mlflow server
       --backend-store-uri postgresql://mlops:mlops@postgres:5432/mlflow
-      --default-artifact-root /mlflow/artifacts
+      --default-artifact-root mlflow-artifacts:/artifacts
+      --serve-artifacts
+      --artifacts-destination /mlflow/artifacts
       --host 0.0.0.0
       --port 5000"
     ports:
