@@ -1,7 +1,12 @@
+import os
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-DB_URI = "postgresql+psycopg2://mlops:mlops@postgres:5432/segmentation"
+DEFAULT_DB_URI = "postgresql+psycopg2://mlops:mlops@postgres:5432/segmentation"
+
+
+def get_db_uri() -> str:
+    return os.environ.get("DB_URI", DEFAULT_DB_URI)
 
 
 RENAME = {
@@ -10,7 +15,7 @@ RENAME = {
     "BALANCE_FREQUENCY": "balance_frequency",
     "PURCHASES": "purchases",
     "ONEOFF_PURCHASES": "oneoff_purchases",
-    "INSTALLMENTS_PURCHASES": "installment_purchases",
+    "INSTALLMENTS_PURCHASES": "installments_purchases",
     "CASH_ADVANCE": "cash_advance",
     "PURCHASES_FREQUENCY": "purchases_frequency",
     "ONEOFF_PURCHASES_FREQUENCY": "oneoff_purchases_frequency",
@@ -37,7 +42,7 @@ def load_csv_to_postgres(csv_path: str = "/opt/airflow/data/Customer Data.csv"):
     cols = ["customer_id", "event_timestamp"] + [v for v in RENAME.values() if v != "customer_id"]
     df = df[cols]
 
-    engine = create_engine(DB_URI)
+    engine = create_engine(get_db_uri())
 
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE TABLE customer_features;"))
