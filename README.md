@@ -14,7 +14,7 @@ An interactive customer-segmentation project with offer matching.
 Full MLOps loop: data loading -> training -> experiment tracking -> batch scoring -> interactive visualization.
 
 ## Screen Recording (Streamlit)
-<video src="exmp/app_recording.mov" controls loop muted playsinline style="max-width: 100%;"></video>
+<video src="exmp/app_recording.gif" controls loop muted playsinline style="max-width: 100%;"></video>
 
 If the video does not render, open the file directly: `exmp/app_recording.mov`.
 
@@ -158,18 +158,4 @@ Streamlit -> prediction + visualization
 ---
 
 ## Charts and visuals (from notebook)
-![EDA distributions](exmp/notebook_01.png)
-
-![PCA](exmp/notebook_02.png)
-
-![K-means](exmp/notebook_03.png)
-
-![DBSCAN](exmp/notebook_04.png)
-
-![HDBSCAN](exmp/notebook_05.png)
-
-![Agglomerative](exmp/notebook_06.png)
-
-![Gaussian Mixture](exmp/notebook_07.png)
-
-![Spectral](exmp/notebook_08.png)
+![Notebook Visuals](exmp/demo.gif)
