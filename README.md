@@ -1,4 +1,4 @@
-# Customer Segmentation - MLOps Demo (Portfolio)
+# Customer Segmentation Project
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)
 ![Airflow](https://img.shields.io/badge/Airflow-2.7.3-017CEE?logo=apacheairflow&logoColor=white)
