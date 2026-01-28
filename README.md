@@ -58,6 +58,32 @@ Finally, I built the Streamlit app so the workflow becomes tangible: users can g
 - **Size**: 8,950 customers x 18 columns (1 ID + 17 numeric features)
 - **Missing values**: 314 values (0.195%), mostly `MINIMUM_PAYMENTS` and 1 in `CREDIT_LIMIT`
 - **Feature examples**: balance, purchases, cash advance, transaction frequencies, payments, credit limit, tenure
+- **Source**: Kaggle dataset *Market Segmentation in Insurance (Unsupervised)*
+- **Authors**: Jillani Soft Tech
+- **License**: Open Database License (ODbL) for the database, Open Database Contents for contents
+
+## Dataset download
+The dataset is not stored in git. Download it from Kaggle and place it here:
+```
+data/Customer Data.csv
+```
+
+**Option A: Kaggle CLI**
+```bash
+kaggle datasets download -d market-segmentation-in-insurance-unsupervised -p data
+unzip -o data/market-segmentation-in-insurance-unsupervised.zip -d data
+rm -f data/market-segmentation-in-insurance-unsupervised.zip
+```
+
+**Option B: Manual**
+1. Open the Kaggle dataset page (search for **market-segmentation-in-insurance-unsupervised**).
+2. Download the zip and extract it.
+3. Copy `Customer Data.csv` into `data/`.
+
+Kaggle source:
+```
+https://www.kaggle.com/datasets/jillanisofttech/market-segmentation-in-insurance-unsupervised
+```
 
 ---
 
