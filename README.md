@@ -13,6 +13,8 @@
 An interactive customer-segmentation project with offer matching.
 Full MLOps loop: data loading -> training -> experiment tracking -> batch scoring -> interactive visualization.
 
+You can test this project [here](http://credit-app-ybibn9-53687e-185-184-121-43.traefik.me)
+
 ## Screen Recording 
 ![App visualization](exmp/app_recording_update.gif)
 
