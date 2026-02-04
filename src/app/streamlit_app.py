@@ -81,7 +81,6 @@ def get_engine_cached(db_uri: str):
     return get_engine(db_uri)
 
 
-@st.cache_data
 def load_random_row(db_uri: str) -> Dict[str, float]:
     try:
         engine = get_engine_cached(db_uri)
@@ -165,20 +164,13 @@ def init_session_state(db_uri: str):
 def set_features(values: Dict[str, float], update_inputs: bool = False) -> None:
     st.session_state["features"] = values
     if update_inputs:
-        st.session_state["pending_features"] = values
+        for name, value in values.items():
+            key = f"input_{name}"
+            if name in INT_FEATURES:
+                st.session_state[key] = int(round(value))
+            else:
+                st.session_state[key] = float(value)
         st.rerun()
-
-
-def apply_pending_inputs() -> None:
-    pending = st.session_state.pop("pending_features", None)
-    if not pending:
-        return
-    for name, value in pending.items():
-        key = f"input_{name}"
-        if name in INT_FEATURES:
-            st.session_state[key] = int(round(value))
-        else:
-            st.session_state[key] = float(value)
 
 
 def render_group(
@@ -194,6 +186,7 @@ def render_group(
             stat = stats.get(name, {})
             min_v = stat.get("min")
             max_v = stat.get("max")
+            key = f"input_{name}"
             with cols[idx % 3]:
                 if name in FREQUENCY_FEATURES:
                     min_v = 0.0
@@ -209,12 +202,13 @@ def render_group(
                     help_text = None
                     if max_v is not None:
                         help_text = f"Integer range: {int(min_v or 0)}–{int(max_v)}"
+                    if key not in st.session_state:
+                        st.session_state[key] = default_int
                     values[name] = st.number_input(
                         label=name,
-                        value=default_int,
                         step=1,
                         format="%d",
-                        key=f"input_{name}",
+                        key=key,
                         help=help_text,
                         **kwargs,
                     )
@@ -230,12 +224,13 @@ def render_group(
                     help_text = None
                     if min_v is not None or max_v is not None:
                         help_text = f"Range: {min_v if min_v is not None else '-'}–{max_v if max_v is not None else '-'}"
+                    if key not in st.session_state:
+                        st.session_state[key] = default_val
                     values[name] = st.number_input(
                         label=name,
-                        value=default_val,
                         step=step,
                         format=fmt,
-                        key=f"input_{name}",
+                        key=key,
                         help=help_text,
                         **kwargs,
                     )
@@ -311,61 +306,27 @@ if st.session_state["viz_uri"] and not is_valid_mlflow_uri(st.session_state["viz
     st.session_state["viz_uri"] = ""
 
 st.session_state["db_uri"] = normalize_db_uri(st.session_state["db_uri"])
+os.environ["DB_URI"] = st.session_state["db_uri"]
 init_session_state(st.session_state["db_uri"])
-apply_pending_inputs()
+
+tracking_default = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+tracking_uri = normalize_tracking_uri(tracking_default)
+if tracking_uri:
+    mlflow.set_tracking_uri(tracking_uri)
+    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
+
+seg_uri = st.session_state["seg_uri"]
+viz_uri = st.session_state["viz_uri"]
 
 with st.sidebar:
-    st.subheader("Model URIs")
-    st.session_state["db_uri"] = normalize_db_uri(
-        st.text_input("DB_URI", value=st.session_state["db_uri"])
-    )
-    if "@127.0.0.1:5433" not in st.session_state["db_uri"]:
-        st.caption("Tip: Docker Postgres is mapped to 127.0.0.1:5433.")
-        if st.button("Use docker DB (5433)"):
-            st.session_state["db_uri"] = "postgresql+psycopg2://mlops:mlops@127.0.0.1:5433/segmentation"
-    os.environ["DB_URI"] = st.session_state["db_uri"]
-    tracking_default = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-    tracking_uri = normalize_tracking_uri(st.text_input("MLFLOW_TRACKING_URI", value=tracking_default))
-    if tracking_uri:
-        mlflow.set_tracking_uri(tracking_uri)
-        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
-
-    if st.button("Resolve latest from MLflow"):
-        try:
-            seg_uri_default, viz_uri_default = resolve_model_uris()
-            st.session_state["seg_uri"] = seg_uri_default
-            st.session_state["viz_uri"] = viz_uri_default
-        except Exception as exc:
-            st.warning(f"Failed to resolve latest MLflow run: {exc}")
-
-    seg_uri = st.text_input("SEG_MODEL_URI", value=st.session_state["seg_uri"])
-    viz_uri = st.text_input("VIZ_MODEL_URI", value=st.session_state["viz_uri"])
-
-    if st.button("Generate random sample"):
+    st.subheader("Generate Profile")
+    if st.button("Generate random user"):
         set_features(load_random_row(st.session_state["db_uri"]), update_inputs=True)
 
-    row_count = load_row_count(st.session_state["db_uri"])
-    if row_count is None:
-        st.warning("DB connection failed. Check DB_URI.")
-    else:
-        st.caption(f"Rows in customer_features: {row_count}")
-
     st.divider()
-    st.subheader("PCA Plot")
-    max_points = 10000
-    if row_count:
-        max_points = int(min(row_count, 10000))
-    pca_points = st.slider(
-        "PCA sample size",
-        min_value=500,
-        max_value=max_points,
-        value=min(4000, max_points),
-        step=500,
-    )
-
     cluster_options = {f"{k} — {SEGMENT_NAME.get(k, f'segment_{k}')}": k for k in sorted(SEGMENT_NAME)}
-    cluster_label = st.selectbox("Generate by cluster", list(cluster_options.keys()))
-    if st.button("Generate cluster-based sample"):
+    cluster_label = st.selectbox("Cluster", list(cluster_options.keys()))
+    if st.button("Generate by cluster"):
         if not seg_uri or not is_valid_mlflow_uri(seg_uri):
             try:
                 seg_uri_default, viz_uri_default = resolve_model_uris()
@@ -386,23 +347,6 @@ with st.sidebar:
             except Exception as exc:
                 st.warning(f"Cluster-based generation failed: {exc}")
 
-    st.divider()
-    st.subheader("Train / Refresh")
-    use_pca = st.checkbox("Use PCA", value=True)
-    pca_var = st.slider("PCA variance", min_value=0.6, max_value=0.99, value=0.9, step=0.01)
-    if st.button("Train / Refresh model"):
-        try:
-            os.environ["DB_URI"] = st.session_state["db_uri"]
-            os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
-            with st.spinner("Training model..."):
-                run_id = train(k=4, use_pca=use_pca, pca_var=float(pca_var))
-            st.session_state["seg_uri"] = f"runs:/{run_id}/{MODEL_ARTIFACT_PATH}"
-            st.session_state["viz_uri"] = f"runs:/{run_id}/{VIZ_ARTIFACT_PATH}"
-            with st.spinner("Batch scoring..."):
-                batch_score(run_id=run_id, truncate=True)
-            st.success(f"Training complete. Run: {run_id}")
-        except Exception as exc:
-            st.error(f"Train/refresh failed: {exc}")
 
 
 with st.form("prediction_form"):
@@ -434,12 +378,15 @@ if submitted:
 
     st.success(f"Cluster: {result['cluster_id']} — {result['segment_name']}")
     st.info(f"Offer: {result['offer']}")
-
     st.subheader("PCA Visualization")
     try:
         import matplotlib.pyplot as plt
 
-        sample_df = load_sample(st.session_state["db_uri"], limit=pca_points)
+        row_count = load_row_count(st.session_state["db_uri"])
+        limit = 3000
+        if row_count:
+            limit = int(min(row_count, 3000))
+        sample_df = load_sample(st.session_state["db_uri"], limit=limit)
         if sample_df.empty:
             raise ValueError("No data in customer_features to build PCA background.")
         seg_model, viz_model = load_models(result["seg_uri"], result["viz_uri"], tracking_uri)
@@ -463,6 +410,8 @@ if submitted:
         ax.set_xlabel("PC1")
         ax.set_ylabel("PC2")
         ax.legend(loc="best")
-        st.pyplot(fig, clear_figure=True)
+        plot_col = st.columns([1, 1, 1])[1]
+        with plot_col:
+            st.pyplot(fig, clear_figure=True, use_container_width=True)
     except Exception as exc:
         st.warning(f"PCA plot unavailable: {exc}")
