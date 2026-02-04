@@ -61,6 +61,24 @@ services:
       rm -f /opt/airflow/airflow-webserver.pid &&
       airflow webserver --port 8080 & airflow scheduler"
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: segmentation-app
+    depends_on:
+      - postgres
+      - mlflow
+    environment:
+      DB_URI: postgresql+psycopg2://mlops:mlops@postgres:5432/segmentation
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8501:8501"
+    command: >
+      streamlit run src/app/streamlit_app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+
 volumes:
   pgdata:
   mlflow_artifacts:
