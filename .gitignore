@@ -12,7 +12,6 @@ venv/
 .DS_Store
 
 # Data / artifacts
-data/
 artifacts/
 mlruns/
 
@@ -20,6 +19,3 @@ mlruns/
 .vscode/
 .idea/
 
-
-Customer Data.csv
-market-segmentation-in-insurance-unsupervised.zip
