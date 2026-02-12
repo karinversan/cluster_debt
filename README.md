@@ -65,7 +65,7 @@ Finally, I built the Streamlit app so the workflow becomes tangible: users can g
 - **License**: Open Database License (ODbL) for the database, Open Database Contents for contents
 
 ## Dataset download
-The dataset is not stored in git. Download it from Kaggle and place it here:
+For local runs and Streamlit Cloud demo mode, ensure the dataset is available here:
 ```
 data/Customer Data.csv
 ```
@@ -110,6 +110,18 @@ streamlit run src/app/streamlit_app.py
 - **Airflow**: http://localhost:8080 (login/password: admin/admin)
 - **MLflow**: http://localhost:5000
 - **Streamlit**: http://localhost:8501
+
+---
+
+## Streamlit Cloud
+This repo includes a demo mode that runs without Postgres or MLflow and trains a local model from the CSV.
+
+1. Deploy this repo on Streamlit Cloud with `streamlit_app.py` as the entry file.
+2. Ensure `data/Customer Data.csv` is committed to the repo.
+3. In Streamlit Cloud app settings, set:
+   - `DEMO_MODE=1`
+
+The app will use demo mode by default in Cloud and skip all DB/MLflow dependencies.
 
 ---
 

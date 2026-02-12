@@ -6,8 +6,6 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
-import mlflow
-import mlflow.sklearn
 
 # Ensure repo root is on sys.path when running via Streamlit.
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -15,16 +13,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.ml.db import get_engine
-from src.ml.preprocess import get_feature_cols
+from src.ml.load_features import RENAME
+from src.ml.preprocess import get_feature_cols, make_preprocess
 from src.ml.predict import (
     predict_single,
     resolve_model_uris,
     SEGMENT_NAME,
+    SEGMENT_OFFER,
     batch_score,
     MODEL_ARTIFACT_PATH,
     VIZ_ARTIFACT_PATH,
 )
-from src.ml.train import train
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.pipeline import Pipeline
 
 
 st.set_page_config(page_title="Customer Segmentation", layout="wide")
@@ -48,6 +50,13 @@ FREQUENCY_FEATURES = [
 MINPAY_FEATURES = ["minimum_payments"]
 TENURE_FEATURES = ["tenure"]
 INT_FEATURES = COUNT_FEATURES + TENURE_FEATURES
+
+DATA_CSV_PATH = REPO_ROOT / "data" / "Customer Data.csv"
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _clamp(value: float, min_v: Optional[float], max_v: Optional[float]) -> float:
@@ -81,6 +90,40 @@ def get_engine_cached(db_uri: str):
     return get_engine(db_uri)
 
 
+@st.cache_data
+def load_local_data() -> pd.DataFrame:
+    if not DATA_CSV_PATH.exists():
+        raise FileNotFoundError(
+            f"Dataset not found at {DATA_CSV_PATH}. "
+            "Place 'Customer Data.csv' in the data/ folder."
+        )
+    df = pd.read_csv(DATA_CSV_PATH)
+    df = df.rename(columns=RENAME)
+    feature_cols = get_feature_cols()
+    missing = [c for c in feature_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in CSV: {missing}")
+    return df
+
+
+@st.cache_resource
+def train_local_models(df: pd.DataFrame, n_clusters: int = 4):
+    preprocess = make_preprocess()
+    seg_pipe = Pipeline([
+        ("preprocess", preprocess),
+        ("pca", PCA(n_components=0.9, random_state=42)),
+        ("model", KMeans(n_clusters=n_clusters, n_init="auto", random_state=42)),
+    ])
+    seg_pipe.fit(df[FEATURE_COLS])
+
+    viz_pipe = Pipeline([
+        ("preprocess", preprocess),
+        ("pca", PCA(n_components=2, random_state=42)),
+    ])
+    viz_pipe.fit(df[FEATURE_COLS])
+    return seg_pipe, viz_pipe
+
+
 def load_random_row(db_uri: str) -> Dict[str, float]:
     try:
         engine = get_engine_cached(db_uri)
@@ -108,6 +151,9 @@ def load_sample(db_uri: str, limit: int = 500) -> pd.DataFrame:
 
 @st.cache_resource
 def load_models(seg_uri: str, viz_uri: str, tracking_uri: Optional[str]):
+    import mlflow
+    import mlflow.sklearn
+
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
     seg_model = mlflow.sklearn.load_model(seg_uri)
@@ -117,6 +163,9 @@ def load_models(seg_uri: str, viz_uri: str, tracking_uri: Optional[str]):
 
 @st.cache_resource
 def load_seg_model(seg_uri: str, tracking_uri: Optional[str]):
+    import mlflow
+    import mlflow.sklearn
+
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
     return mlflow.sklearn.load_model(seg_uri)
@@ -155,10 +204,43 @@ def load_row_count(db_uri: str) -> Optional[int]:
         return None
 
 
-def init_session_state(db_uri: str):
+def load_random_row_local(df: pd.DataFrame) -> Dict[str, float]:
+    if df.empty:
+        return {c: 0.0 for c in FEATURE_COLS}
+    return df.sample(1).iloc[0][FEATURE_COLS].to_dict()
+
+
+def load_sample_local(df: pd.DataFrame, limit: int = 500) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=FEATURE_COLS)
+    size = min(limit, len(df))
+    return df.sample(size)[FEATURE_COLS].copy()
+
+
+def load_feature_stats_local(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    if df.empty:
+        return {}
+    stats: Dict[str, Dict[str, float]] = {}
+    for c in FEATURE_COLS:
+        series = df[c].dropna()
+        stats[c] = {
+            "min": float(series.min()) if not series.empty else 0.0,
+            "max": float(series.max()) if not series.empty else 0.0,
+        }
+    return stats
+
+
+def load_row_count_local(df: pd.DataFrame) -> int:
+    return int(len(df))
+
+
+def init_session_state(db_uri: str, local_df: Optional[pd.DataFrame] = None):
     if "features" in st.session_state:
         return
-    st.session_state["features"] = load_random_row(db_uri)
+    if local_df is not None:
+        st.session_state["features"] = load_random_row_local(local_df)
+    else:
+        st.session_state["features"] = load_random_row(db_uri)
 
 
 def set_features(values: Dict[str, float], update_inputs: bool = False) -> None:
@@ -291,67 +373,176 @@ def generate_cluster_profile(
         profile[name] = float(_clamp(float(value), min_v, max_v))
     return profile
 
-if "db_uri" not in st.session_state:
-    st.session_state["db_uri"] = os.environ.get(
-        "DB_URI",
-        "postgresql+psycopg2://mlops:mlops@127.0.0.1:5433/segmentation",
-    )
-if "seg_uri" not in st.session_state:
-    st.session_state["seg_uri"] = os.environ.get("SEG_MODEL_URI", "")
-if "viz_uri" not in st.session_state:
-    st.session_state["viz_uri"] = os.environ.get("VIZ_MODEL_URI", "")
-if st.session_state["seg_uri"] and not is_valid_mlflow_uri(st.session_state["seg_uri"]):
-    st.session_state["seg_uri"] = ""
-if st.session_state["viz_uri"] and not is_valid_mlflow_uri(st.session_state["viz_uri"]):
-    st.session_state["viz_uri"] = ""
 
-st.session_state["db_uri"] = normalize_db_uri(st.session_state["db_uri"])
-os.environ["DB_URI"] = st.session_state["db_uri"]
-init_session_state(st.session_state["db_uri"])
+def generate_cluster_profile_local(
+    df: pd.DataFrame,
+    seg_model,
+    cluster_id: int,
+) -> Dict[str, float]:
+    sample_df = load_sample_local(df, limit=4000)
+    if sample_df.empty:
+        raise ValueError("No data available for demo mode.")
+    labels = seg_model.predict(sample_df[FEATURE_COLS])
+    sample_df = sample_df.copy()
+    sample_df["cluster_id"] = labels
+    cluster_df = sample_df[sample_df["cluster_id"] == cluster_id]
+    if cluster_df.empty:
+        cluster_df = sample_df
+    rng = np.random.default_rng()
+    profile: Dict[str, float] = {}
+    for name in FEATURE_COLS:
+        series = cluster_df[name].dropna()
+        if series.empty:
+            profile[name] = 0.0
+            continue
+        if name in INT_FEATURES:
+            value = float(series.sample(1).iloc[0])
+        elif name in FREQUENCY_FEATURES:
+            mean = float(series.mean())
+            std = float(series.std() or 0.0)
+            value = mean + rng.normal(0.0, std if std > 0 else 0.0)
+        else:
+            if (series > 0).all():
+                log_vals = np.log1p(series.values)
+                mu = float(np.mean(log_vals))
+                sigma = float(np.std(log_vals))
+                value = float(np.expm1(rng.normal(mu, sigma if sigma > 0 else 0.0)))
+            else:
+                mean = float(series.mean())
+                std = float(series.std() or 0.0)
+                value = mean + rng.normal(0.0, std if std > 0 else 0.0)
+        profile[name] = float(value)
+    stats = load_feature_stats_local(df)
+    for name in INT_FEATURES:
+        if name in profile:
+            profile[name] = int(round(profile[name]))
+    for name, value in profile.items():
+        bounds = stats.get(name, {})
+        min_v = bounds.get("min")
+        max_v = bounds.get("max")
+        if name in FREQUENCY_FEATURES:
+            min_v = 0.0
+            max_v = 1.0
+        profile[name] = float(_clamp(float(value), min_v, max_v))
+    return profile
 
-tracking_default = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-tracking_uri = normalize_tracking_uri(tracking_default)
-if tracking_uri:
-    mlflow.set_tracking_uri(tracking_uri)
-    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
 
-seg_uri = st.session_state["seg_uri"]
-viz_uri = st.session_state["viz_uri"]
+def predict_single_local(
+    features: Dict[str, float],
+    seg_model,
+    viz_model,
+) -> Dict[str, object]:
+    feature_cols = get_feature_cols()
+    df = pd.DataFrame([features], columns=feature_cols)
+    cluster_id = int(seg_model.predict(df)[0])
+    pc1, pc2 = [float(x) for x in viz_model.transform(df)[0]]
+    return {
+        "cluster_id": cluster_id,
+        "segment_name": SEGMENT_NAME.get(cluster_id, f"segment_{cluster_id}"),
+        "offer": SEGMENT_OFFER.get(cluster_id, "generic offer"),
+        "pc1": pc1,
+        "pc2": pc2,
+        "seg_uri": "local",
+        "viz_uri": "local",
+    }
+
+default_demo = _env_truthy("DEMO_MODE") or _env_truthy("STREAMLIT_CLOUD")
+if "demo_mode" not in st.session_state:
+    st.session_state["demo_mode"] = default_demo
+
+with st.sidebar:
+    st.subheader("Mode")
+    st.checkbox("Demo mode (no DB/MLflow)", key="demo_mode")
+    st.caption("Demo mode trains locally from the CSV in data/ and skips DB/MLflow.")
+
+demo_mode = bool(st.session_state["demo_mode"])
+
+if not demo_mode:
+    if "db_uri" not in st.session_state:
+        st.session_state["db_uri"] = os.environ.get(
+            "DB_URI",
+            "postgresql+psycopg2://mlops:mlops@127.0.0.1:5433/segmentation",
+        )
+    if "seg_uri" not in st.session_state:
+        st.session_state["seg_uri"] = os.environ.get("SEG_MODEL_URI", "")
+    if "viz_uri" not in st.session_state:
+        st.session_state["viz_uri"] = os.environ.get("VIZ_MODEL_URI", "")
+    if st.session_state["seg_uri"] and not is_valid_mlflow_uri(st.session_state["seg_uri"]):
+        st.session_state["seg_uri"] = ""
+    if st.session_state["viz_uri"] and not is_valid_mlflow_uri(st.session_state["viz_uri"]):
+        st.session_state["viz_uri"] = ""
+
+    st.session_state["db_uri"] = normalize_db_uri(st.session_state["db_uri"])
+    os.environ["DB_URI"] = st.session_state["db_uri"]
+    init_session_state(st.session_state["db_uri"])
+
+    tracking_default = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+    tracking_uri = normalize_tracking_uri(tracking_default)
+    if tracking_uri:
+        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
+
+    seg_uri = st.session_state["seg_uri"]
+    viz_uri = st.session_state["viz_uri"]
+else:
+    try:
+        local_df = load_local_data()
+    except Exception as exc:
+        st.error(f"Demo mode unavailable: {exc}")
+        st.stop()
+    init_session_state("demo", local_df=local_df)
+    seg_model_local, viz_model_local = train_local_models(local_df)
 
 with st.sidebar:
     st.subheader("Generate Profile")
     if st.button("Generate random user"):
-        set_features(load_random_row(st.session_state["db_uri"]), update_inputs=True)
+        if demo_mode:
+            set_features(load_random_row_local(local_df), update_inputs=True)
+        else:
+            set_features(load_random_row(st.session_state["db_uri"]), update_inputs=True)
 
     st.divider()
     cluster_options = {f"{k} — {SEGMENT_NAME.get(k, f'segment_{k}')}": k for k in sorted(SEGMENT_NAME)}
     cluster_label = st.selectbox("Cluster", list(cluster_options.keys()))
     if st.button("Generate by cluster"):
-        if not seg_uri or not is_valid_mlflow_uri(seg_uri):
+        if demo_mode:
             try:
-                seg_uri_default, viz_uri_default = resolve_model_uris()
-                st.session_state["seg_uri"] = seg_uri_default
-                st.session_state["viz_uri"] = viz_uri_default
-                seg_uri = seg_uri_default
-            except Exception as exc:
-                st.warning(f"SEG_MODEL_URI is empty and resolve failed: {exc}")
-        if seg_uri:
-            try:
-                profile = generate_cluster_profile(
-                    seg_uri,
+                profile = generate_cluster_profile_local(
+                    local_df,
+                    seg_model_local,
                     cluster_options[cluster_label],
-                    tracking_uri,
-                    st.session_state["db_uri"],
                 )
                 set_features(profile, update_inputs=True)
             except Exception as exc:
                 st.warning(f"Cluster-based generation failed: {exc}")
+        else:
+            if not seg_uri or not is_valid_mlflow_uri(seg_uri):
+                try:
+                    seg_uri_default, viz_uri_default = resolve_model_uris()
+                    st.session_state["seg_uri"] = seg_uri_default
+                    st.session_state["viz_uri"] = viz_uri_default
+                    seg_uri = seg_uri_default
+                except Exception as exc:
+                    st.warning(f"SEG_MODEL_URI is empty and resolve failed: {exc}")
+            if seg_uri:
+                try:
+                    profile = generate_cluster_profile(
+                        seg_uri,
+                        cluster_options[cluster_label],
+                        tracking_uri,
+                        st.session_state["db_uri"],
+                    )
+                    set_features(profile, update_inputs=True)
+                except Exception as exc:
+                    st.warning(f"Cluster-based generation failed: {exc}")
 
 
 
 with st.form("prediction_form"):
     st.subheader("Input Features")
-    stats = load_feature_stats(st.session_state["db_uri"])
+    if demo_mode:
+        stats = load_feature_stats_local(local_df)
+    else:
+        stats = load_feature_stats(st.session_state["db_uri"])
     inputs: Dict[str, float] = {}
     inputs.update(render_group("Amount Features", AMOUNT_FEATURES, stats))
     inputs.update(render_group("Count Features", COUNT_FEATURES, stats))
@@ -367,11 +558,14 @@ if submitted:
     set_features(inputs)
 
     try:
-        if not seg_uri or not is_valid_mlflow_uri(seg_uri):
-            seg_uri, viz_uri = resolve_model_uris()
-            st.session_state["seg_uri"] = seg_uri
-            st.session_state["viz_uri"] = viz_uri
-        result = predict_single(inputs, seg_uri=seg_uri, viz_uri=viz_uri)
+        if demo_mode:
+            result = predict_single_local(inputs, seg_model_local, viz_model_local)
+        else:
+            if not seg_uri or not is_valid_mlflow_uri(seg_uri):
+                seg_uri, viz_uri = resolve_model_uris()
+                st.session_state["seg_uri"] = seg_uri
+                st.session_state["viz_uri"] = viz_uri
+            result = predict_single(inputs, seg_uri=seg_uri, viz_uri=viz_uri)
     except Exception as exc:
         st.error(f"Prediction failed: {exc}")
         st.stop()
@@ -382,14 +576,22 @@ if submitted:
     try:
         import matplotlib.pyplot as plt
 
-        row_count = load_row_count(st.session_state["db_uri"])
-        limit = 3000
-        if row_count:
-            limit = int(min(row_count, 3000))
-        sample_df = load_sample(st.session_state["db_uri"], limit=limit)
-        if sample_df.empty:
-            raise ValueError("No data in customer_features to build PCA background.")
-        seg_model, viz_model = load_models(result["seg_uri"], result["viz_uri"], tracking_uri)
+        if demo_mode:
+            row_count = load_row_count_local(local_df)
+            limit = int(min(row_count, 3000)) if row_count else 3000
+            sample_df = load_sample_local(local_df, limit=limit)
+            if sample_df.empty:
+                raise ValueError("No data in CSV to build PCA background.")
+            seg_model, viz_model = seg_model_local, viz_model_local
+        else:
+            row_count = load_row_count(st.session_state["db_uri"])
+            limit = 3000
+            if row_count:
+                limit = int(min(row_count, 3000))
+            sample_df = load_sample(st.session_state["db_uri"], limit=limit)
+            if sample_df.empty:
+                raise ValueError("No data in customer_features to build PCA background.")
+            seg_model, viz_model = load_models(result["seg_uri"], result["viz_uri"], tracking_uri)
         Z = viz_model.transform(sample_df[FEATURE_COLS])
         labels = seg_model.predict(sample_df[FEATURE_COLS])
         pc1, pc2 = result["pc1"], result["pc2"]
